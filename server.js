@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -8,6 +9,8 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(cors());
+
+const FILES_DIR = path.join(__dirname, "mock-files");
 
 // 🔑 Fake Auth middleware
 app.use((req, res, next) => {
@@ -18,19 +21,55 @@ app.use((req, res, next) => {
   next();
 });
 
-// 📂 Mock file metadata endpoint
+// 🆕 Helper: Recursively collect files
+function walkDir(dir, fileList = [], basePath = "") {
+  const files = fs.readdirSync(dir);
+
+  files.forEach((file) => {
+    const fullPath = path.join(dir, file);
+    const relPath = path.join(basePath, file); // relative path for API
+
+    const stats = fs.statSync(fullPath);
+
+    if (stats.isDirectory()) {
+      // recurse into folder
+      walkDir(fullPath, fileList, relPath);
+    } else {
+      const ext = path.extname(file).toLowerCase();
+      let type = "Other";
+      if (ext === ".pdf") type = "PDF";
+      if (ext === ".docx" || ext === ".doc") type = "Word";
+      if (ext === ".dcm") type = "DICOM";
+
+      fileList.push({
+        id: fileList.length + 1,
+        documentName: file,
+        type,
+        url: `/files/${relPath.replace(/\\/g, "/")}`, // always forward slashes
+        folder: basePath || null, // keep folder info
+        lastUpdated: stats.mtime.toISOString().split("T")[0],
+      });
+    }
+  });
+
+  return fileList;
+}
+
+// 🆕 Dynamic file + folder listing
 app.get("/api/files", (req, res) => {
-  res.json([
-    { id: 1, documentName: "Discharge_Summary.pdf", type: "PDF", url: "/files/Discharge_Summary.pdf", lastUpdated: '1.01.25' },
-    { id: 2, documentName: "Lab_Report.docx", type: "Word", url: "/files/Lab_Report.docx", lastUpdated: '9.02.25' },
-    { id: 4, documentName: "Chest_XRay.dcm", type: "DICOM", url: "/files/Chest_XRay.dcm", lastUpdated: '8.03.25'},
-    { id: 5, documentName: "MAGNETOM Vida, 3T.dcm", type: "DICOM", url: "/files/MAGNETOM Vida, 3T.dcm", lastUpdated: '12.04.24'},
-    { id: 6, documentName: "MAGNETOM Altea, 1.5T.dcm", type: "DICOM", url: "/files/MAGNETOM Altea, 1.5T.dcm", lastUpdated: '12.04.24'}
-  ]);
+  try {
+    const fileList = walkDir(FILES_DIR);
+    res.json(fileList);
+  } catch (err) {
+    console.error("Error reading files:", err);
+    res.status(500).json({ error: "Failed to read files" });
+  }
 });
 
-// 📥 Serve actual files
-app.use("/files", express.static(path.join(__dirname, "mock-files")));
+// 📥 Serve files (with subfolders supported)
+app.use("/files", express.static(FILES_DIR));
 
 const PORT = 4000;
-app.listen(PORT, () => console.log(`Pegasos Mock API running at http://localhost:${PORT}`));
+app.listen(PORT, () =>
+  console.log(`Pegasos Mock API running at http://localhost:${PORT}`)
+);
